@@ -1,0 +1,156 @@
+"""Enforce the site's CSP-related rules on published HTML and CSS files."""
+
+import os
+import re
+import sys
+from html.parser import HTMLParser
+
+EXPECTED_CSP = (
+    "default-src 'none'; style-src 'self'; img-src 'self'; font-src 'self'; "
+    "base-uri 'none'; form-action 'none'"
+)
+
+# <link rel=...> values that make the browser fetch something.
+LOADING_LINK_RELS = {"stylesheet", "icon", "apple-touch-icon", "preload", "modulepreload",
+                     "manifest", "prefetch", "mask-icon"}
+# tag -> attributes that load a resource
+RESOURCE_ATTRS = {
+    "img": ("src", "srcset"),
+    "source": ("src", "srcset"),
+    "script": ("src",),
+    "iframe": ("src",),
+    "frame": ("src",),
+    "embed": ("src",),
+    "object": ("data",),
+    "video": ("src", "poster"),
+    "audio": ("src",),
+    "track": ("src",),
+    "input": ("src",),
+}
+
+
+def _normalise_csp(value: str) -> str:
+    return " ".join(value.split()).rstrip(";").strip()
+
+
+def _is_external(url: str) -> bool:
+    u = url.strip().lower()
+    return u.startswith(("http://", "https://", "//", "data:"))
+
+
+def _srcset_urls(value: str) -> list[str]:
+    return [part.strip().split()[0] for part in value.split(",") if part.strip()]
+
+
+class _Checker(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.errors: list[str] = []
+        self.saw_csp = False
+        self._in_script = False
+        self._script_has_src = False
+        self._script_text = ""
+
+    def _resource(self, tag: str, attr: str, url: str) -> None:
+        if not self.saw_csp:
+            self.errors.append(f"<{tag} {attr}={url!r}> loads before the CSP meta tag")
+        if _is_external(url):
+            self.errors.append(f"<{tag} {attr}={url!r}> loads an external resource")
+
+    def handle_starttag(self, tag, attrs):
+        a = {k.lower(): (v or "") for k, v in attrs}
+        for name in a:
+            if name.startswith("on"):
+                self.errors.append(f"<{tag}> has inline event handler {name}=")
+        if "style" in a:
+            self.errors.append(f"<{tag}> has inline style= attribute")
+        if tag == "style":
+            self.errors.append("<style> element (inline CSS is blocked by the CSP)")
+        if tag == "meta" and a.get("http-equiv", "").lower() == "content-security-policy":
+            self.saw_csp = True
+            if _normalise_csp(a.get("content", "")) != _normalise_csp(EXPECTED_CSP):
+                self.errors.append(f"CSP does not match the expected policy: {a.get('content')!r}")
+        if tag == "link":
+            rels = set(a.get("rel", "").lower().split())
+            if rels & LOADING_LINK_RELS and a.get("href"):
+                self._resource(tag, "href", a["href"])
+        for attr in RESOURCE_ATTRS.get(tag, ()):
+            if attr in a and a[attr]:
+                urls = _srcset_urls(a[attr]) if attr == "srcset" else [a[attr]]
+                for url in urls:
+                    self._resource(tag, attr, url)
+        if tag == "script":
+            self._in_script = True
+            self._script_has_src = bool(a.get("src"))
+            self._script_text = ""
+        if tag in ("a", "area"):
+            if a.get("href", "").strip().lower().startswith("javascript:"):
+                self.errors.append(f"<{tag}> uses a javascript: URL")
+            if a.get("target", "").lower() == "_blank":
+                rels = set(a.get("rel", "").lower().split())
+                if not {"noopener", "noreferrer"} <= rels:
+                    self.errors.append(f"<{tag} href={a.get('href')!r} target=_blank> needs rel=\"noopener noreferrer\"")
+        if tag == "img" and "alt" not in a:
+            self.errors.append(f"<img src={a.get('src')!r}> has no alt attribute")
+
+    def handle_data(self, data):
+        if self._in_script:
+            self._script_text += data
+
+    def handle_endtag(self, tag):
+        if tag == "script" and self._in_script:
+            if not self._script_has_src:
+                self.errors.append("inline <script> (blocked by the CSP)")
+            self._in_script = False
+
+
+def check_html(text: str) -> list[str]:
+    checker = _Checker()
+    checker.feed(text)
+    checker.close()
+    if not checker.saw_csp:
+        checker.errors.append("no CSP meta tag found")
+    return checker.errors
+
+
+_CSS_URL = re.compile(r"""url\(\s*(['"]?)(.*?)\1\s*\)""", re.IGNORECASE)
+_CSS_IMPORT = re.compile(r"""@import\s+(['"])(.*?)\1""", re.IGNORECASE)
+
+
+def check_css(text: str) -> list[str]:
+    errors = []
+    for pattern in (_CSS_URL, _CSS_IMPORT):
+        for match in pattern.finditer(text):
+            url = match.group(2)
+            if _is_external(url):
+                errors.append(f"CSS loads an external resource: {url!r}")
+    return errors
+
+
+def main(argv: list[str]) -> int:
+    if len(argv) != 2:
+        print("usage: check_html.py <site_dir>", file=sys.stderr)
+        return 2
+    problems = []
+    checked = 0
+    for dirpath, _dirnames, filenames in os.walk(argv[1]):
+        for name in sorted(filenames):
+            ext = os.path.splitext(name)[1].lower()
+            if ext not in (".html", ".css"):
+                continue
+            path = os.path.join(dirpath, name)
+            with open(path, encoding="utf-8") as f:
+                text = f.read()
+            checked += 1
+            found = check_html(text) if ext == ".html" else check_css(text)
+            problems.extend(f"{path}: {p}" for p in found)
+    for p in problems:
+        print(p)
+    if problems:
+        return 1
+    print(f"OK: HTML/CSS policy check passed ({checked} files)")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))
