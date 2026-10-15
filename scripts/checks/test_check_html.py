@@ -4,7 +4,7 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from check_html import EXPECTED_CSP, check_css, check_html  # noqa: E402
+from check_html import EXPECTED_CSP, check_css, check_html, check_svg  # noqa: E402
 
 CSP_META = f'<meta http-equiv="Content-Security-Policy" content="{EXPECTED_CSP}">'
 
@@ -83,6 +83,42 @@ class CheckHtmlTest(unittest.TestCase):
     def test_img_without_alt_fails(self):
         self.assertTrue(any("alt" in e for e in check_html(page(body='<img src="a.png">'))))
 
+    def test_external_preconnect_fails(self):
+        errors = check_html(page('<link rel="preconnect" href="https://fonts.gstatic.com">'))
+        self.assertTrue(any("external" in e for e in errors))
+
+    def test_external_dns_prefetch_fails(self):
+        errors = check_html(page('<link rel="dns-prefetch" href="//cdn.example.com">'))
+        self.assertTrue(any("external" in e for e in errors))
+
+    def test_csp_outside_head_fails(self):
+        html = f'<html><head><meta charset="utf-8"></head><body>{CSP_META}<p>x</p></body></html>'
+        self.assertTrue(any("outside <head>" in e for e in check_html(html)))
+
+    def test_backslash_url_fails(self):
+        errors = check_html(page(body='<img src="\\\\evil.example/a.png" alt="a">'))
+        self.assertTrue(any("external" in e for e in errors))
+
+    def test_url_with_embedded_newline_fails(self):
+        errors = check_html(page(body='<img src="ht\ntps://evil.example/a.png" alt="a">'))
+        self.assertTrue(any("external" in e for e in errors))
+
+    def test_duplicate_attribute_fails(self):
+        errors = check_html(page(body='<img src="https://evil.example/a.png" src="a.png" alt="a">'))
+        self.assertTrue(any("duplicate" in e for e in errors))
+
+    def test_meta_refresh_fails(self):
+        errors = check_html(page('<meta http-equiv="refresh" content="0;url=https://evil.example">'))
+        self.assertTrue(any("refresh" in e for e in errors))
+
+    def test_svg_image_href_fails(self):
+        body = '<svg><image href="https://evil.example/a.png"/></svg>'
+        self.assertTrue(any("external" in e for e in check_html(page(body=body))))
+
+    def test_svg_image_xlink_href_fails(self):
+        body = '<svg><image xlink:href="https://evil.example/a.png"/></svg>'
+        self.assertTrue(any("external" in e for e in check_html(page(body=body))))
+
 
 class CheckCssTest(unittest.TestCase):
     def test_local_url_passes(self):
@@ -96,6 +132,38 @@ class CheckCssTest(unittest.TestCase):
 
     def test_bare_external_import_fails(self):
         self.assertTrue(check_css('@import "//cdn.example.com/x.css";'))
+
+    def test_external_image_set_string_fails(self):
+        self.assertTrue(check_css('a { background-image: image-set("https://x.example/a.png" 1x); }'))
+
+    def test_local_image_set_passes(self):
+        self.assertEqual(check_css('a { background-image: image-set("a.png" 1x, "a@2x.png" 2x); }'), [])
+
+    def test_backslash_url_fails(self):
+        self.assertTrue(check_css("a { background: url('\\\\evil.example/a.png'); }"))
+
+
+class CheckSvgTest(unittest.TestCase):
+    def test_plain_svg_passes(self):
+        svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><path d="M0 0h64v64H0z"/></svg>'
+        self.assertEqual(check_svg(svg), [])
+
+    def test_svg_style_element_with_local_css_passes(self):
+        self.assertEqual(check_svg("<svg><style>path{fill:#fff}</style></svg>"), [])
+
+    def test_svg_script_fails(self):
+        self.assertTrue(any("script" in e for e in check_svg("<svg><script>alert(1)</script></svg>")))
+
+    def test_svg_event_handler_fails(self):
+        self.assertTrue(any("onload" in e for e in check_svg('<svg onload="alert(1)"></svg>')))
+
+    def test_svg_external_image_fails(self):
+        errors = check_svg('<svg><image href="https://evil.example/a.png"/></svg>')
+        self.assertTrue(any("external" in e for e in errors))
+
+    def test_svg_external_css_fails(self):
+        errors = check_svg('<svg><style>@import url("https://evil.example/x.css");</style></svg>')
+        self.assertTrue(any("external" in e for e in errors))
 
 
 if __name__ == "__main__":

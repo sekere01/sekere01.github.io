@@ -1,20 +1,26 @@
 """Fail if anything that looks like a phone number appears in published text files."""
 
+import html
 import os
 import re
 import sys
 
-# A run of digits, spaces, brackets and hyphens, optionally starting with "+".
-# It counts as a phone number when it holds 10–15 digits. Dots are not separators,
-# so "Sep 2026. 2026-10-15" is not read as one long number.
-_CANDIDATE = re.compile(r"\+?\d[\d\s()-]{8,}\d")
+# A run of digits and separators, optionally starting with "+". Separators are
+# whitespace (including the no-break space), brackets, hyphens and dashes
+# (U+2010 to U+2015), and dots directly followed by a digit, so "Sep 2026. 2026-10-15"
+# is not read as one long number. It counts as a phone number when it holds 10–15 digits.
+_CANDIDATE = re.compile(r"\+?\d(?:[\d\s()\-\u2010-\u2015]|\.(?=\d)){8,}\d")
+_IPV4 = re.compile(r"\d{1,3}(?:\.\d{1,3}){3}")
 TEXT_EXTENSIONS = {".html", ".css", ".svg", ".txt", ".xml", ".json", ".md", ".webmanifest"}
 
 
 def find_phone_numbers(text: str) -> list[str]:
     hits = []
-    for match in _CANDIDATE.finditer(text):
+    # Decode character references first, so "&#48;800&nbsp;000" is read as "0800 000".
+    for match in _CANDIDATE.finditer(html.unescape(text)):
         candidate = match.group().strip()
+        if _IPV4.fullmatch(candidate):
+            continue
         digits = sum(ch.isdigit() for ch in candidate)
         if 10 <= digits <= 15:
             hits.append(candidate)
