@@ -32,6 +32,24 @@ class FindPhoneNumbersTest(unittest.TestCase):
         svg = '<svg viewBox="0 0 1200 630"><path d="M32,10 L50,17 V31 C50,43 42,51 32,55 Z"/></svg>'
         self.assertEqual(find_phone_numbers(svg), [])
 
+    def test_detects_dotted_format(self):
+        self.assertEqual(len(find_phone_numbers("tel 0800.000.0000")), 1)
+
+    def test_detects_en_dash_format(self):
+        self.assertEqual(len(find_phone_numbers("tel 0800\u2013000\u20130000")), 1)
+
+    def test_detects_html_encoded_plus(self):
+        self.assertEqual(len(find_phone_numbers("<p>&#43;234 800 000 0000</p>")), 1)
+
+    def test_detects_html_encoded_digits(self):
+        self.assertEqual(len(find_phone_numbers("<p>&#48;800&nbsp;000&nbsp;0000</p>")), 1)
+
+    def test_ignores_ip_addresses_and_versions(self):
+        self.assertEqual(find_phone_numbers("host 192.168.100.200, version 1.22.333"), [])
+
+    def test_ignores_year_ranges(self):
+        self.assertEqual(find_phone_numbers("2019\u20132021, 2021 \u2013 2023"), [])
+
 
 class ScanDirTest(unittest.TestCase):
     def test_reports_file_with_phone_and_skips_binary(self):
