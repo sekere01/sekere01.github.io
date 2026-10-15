@@ -60,7 +60,7 @@ Sticky top bar: name + anchor links — Services · Projects · Experience · Ce
 
 - Dark theme by default, matching light theme via `prefers-color-scheme`. One accent colour (security teal/green) for links, buttons, tags. Monospace only for tags and section labels.
 - System font stack; no web fonts or other external requests.
-- Mobile-first grid: 1 column on phone, 2 on tablet, 3 on desktop. Nav collapses on small screens.
+- Mobile-first grid: 1 column on phone, 2 on tablet, 3 on desktop. On small screens the nav becomes a horizontally scrollable row (no JavaScript toggle).
 - Images: none required. Optional headshot served from the repo. One Open Graph image (`og.png`) and `og:`/`twitter:` meta tags so shared links render a preview card. Favicon.
 - Accessibility: WCAG 2.2 AA contrast in both themes; semantic landmarks (`header`, `nav`, `main`, `section`, `footer`); skip-to-content link; visible focus styles; `prefers-reduced-motion` disables animation; descriptive link text.
 - Performance budget: page + CSS ≈ 50 KB or less, excluding the CV PDF and OG image.
@@ -80,10 +80,11 @@ GitHub Pages does not allow custom HTTP response headers. Controls are therefore
 
 ```
 sekere01.github.io/
-├── index.html
-├── styles.css
-├── assets/            # og.png, favicon, optional headshot, CV PDF (no phone number)
-├── scripts/checks/    # local + CI check scripts
+├── site/              # the only folder published
+│   ├── index.html
+│   ├── styles.css
+│   └── assets/        # og.png, favicon, optional headshot, CV PDF (no phone number)
+├── scripts/checks/    # local + CI check scripts (not published)
 ├── docs/specs/        # this spec
 └── .github/
     ├── workflows/deploy.yml
@@ -97,7 +98,7 @@ sekere01.github.io/
    - Secret scan of the repo.
    - Script that fails if the HTML/CSS references any external origin for a loaded resource (`src`, `href` on `link`, CSS `url()`); outbound `<a href>` links are allowed.
    - Script that fails if a phone-number pattern appears in any published file.
-2. **deploy** job (`needs: check`) — GitHub's official Pages upload and deploy actions.
+2. **deploy** job (`needs: check`) — GitHub's official Pages upload and deploy actions, publishing `site/` only.
 
 **Hardening:**
 
@@ -109,7 +110,7 @@ sekere01.github.io/
 
 ## 7. Verification
 
-- Local preview: `python3 -m http.server` from the repo root.
+- Local preview: `python3 -m http.server 8000 -d site`.
 - Lighthouse: ≥ 95 for Accessibility, Best Practices and SEO.
 - Keyboard-only walkthrough; phone-width check; both colour themes.
 - Share the URL on LinkedIn and confirm the preview card renders.
